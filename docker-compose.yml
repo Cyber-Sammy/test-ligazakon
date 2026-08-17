@@ -4,13 +4,16 @@ services:
   user-service:
     build:
       context: .
-      dockerfile: src/UserService/Dockerfile
+      dockerfile: src/UserService.Api/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=users;Username=app;Password=local-dev-password
       Kafka__BootstrapServers: kafka:9092
+      Kafka__Topics__UserEvents: user-events
     ports:
       - "8080:8080"
+    volumes:
+      - user-service-logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -22,15 +25,37 @@ services:
       dockerfile: src/NotificationService/Dockerfile
     environment:
       DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=notifications;Username=app;Password=local-dev-password
       Kafka__BootstrapServers: kafka:9092
+      Kafka__Topics__UserEvents: user-events
       Smtp__Host: mail
       Smtp__Port: 1025
     depends_on:
+      notification-db-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       mail:
         condition: service_started
     restart: unless-stopped
+
+  notification-db-init:
+    image: postgres:18.4-alpine
+    environment:
+      PGPASSWORD: local-dev-password
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! psql -h postgres -U app -d postgres -v ON_ERROR_STOP=1 -tc "SELECT 1 FROM pg_database WHERE datname = 'notifications'" | grep -q 1; then
+          psql -h postgres -U app -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE notifications"
+        fi
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   postgres:
     image: postgres:18.4-alpine
@@ -55,16 +80,19 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:19092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "19092:19092"
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -73,6 +101,37 @@ services:
       timeout: 10s
       retries: 12
       start_period: 20s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:4.3.0
+    command:
+      - /opt/kafka/bin/kafka-topics.sh
+      - --bootstrap-server
+      - kafka:9092
+      - --create
+      - --if-not-exists
+      - --topic
+      - user-events
+      - --partitions
+      - "3"
+      - --replication-factor
+      - "1"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "8081:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
     restart: unless-stopped
 
   mail:
@@ -84,3 +143,4 @@ services:
 volumes:
   postgres-data:
   kafka-data:
+  user-service-logs:

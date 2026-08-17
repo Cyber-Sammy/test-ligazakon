@@ -1,7 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/NotificationService/NotificationService.csproj" />
-    <Project Path="src/UserService/UserService.csproj" />
+    <Project Path="src/UserService.Api/UserService.Api.csproj" />
+    <Project Path="src/UserService.Application/UserService.Application.csproj" />
+    <Project Path="src/UserService.Domain/UserService.Domain.csproj" />
+    <Project Path="src/UserService.Infrastructure/UserService.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NotificationService.Tests/NotificationService.Tests.csproj" />
